@@ -1,0 +1,6 @@
+*.o
+*.ko
+*.symvers
+*.ko.cmd
+*.o.cmd
+/**/.tmp_versions/
