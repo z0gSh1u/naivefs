@@ -6,10 +6,20 @@
 #include "_naivefs.h"
 #include "naivefs.h"
 
+// 这个函数用来初始化inode很好用，但在2.6.21.7内核下还未提供，我们做个polyfill
+// inode_init_owner的第二个参数是归属目录，根inode没有归属目录，给NULL
+// inode_init_owner的第三个参数是inode的访问控制属性，这里给755，同时标记是目录
+void inode_init_owner(struct inode *inode, const struct inode *dir,
+                      umode_t mode) {
+  inode->i_uid = dir->i_uid; // 这样做不一定准确
+  inode->i_gid = dir->i_gid;
+  inode->i_mode = mode;
+}
+
 // 相当于naive_write_inode的实现
 static struct buffer_head *naive_update_inode(struct inode *inode) {
   struct buffer_head *bh;
-  struct naive_inode *ninode = naive_get_inode(inode->sb, inode->i_ino);
+  struct naive_inode *ninode = naive_get_inode(inode->i_sb, inode->i_ino);
 
   // 就是反过来填信息，不加注释了
   ninode->mode = inode->i_mode;
@@ -24,9 +34,9 @@ static struct buffer_head *naive_update_inode(struct inode *inode) {
   } else {
     // 不支持
   }
-  ninode->i_atime = inode->i_atime;
-  ninode->i_ctime = inode->i_ctime;
-  ninode->i_mtime = inode->i_mtime;
+  ninode->i_atime = inode->i_atime.tv_sec;
+  ninode->i_ctime = inode->i_ctime.tv_sec;
+  ninode->i_mtime = inode->i_mtime.tv_sec;
 
   // 然后把这个块加标脏标记，告知系统已经修改
   mark_buffer_dirty(bh);
@@ -54,21 +64,18 @@ static void naive_read_inode(struct inode *inode) {
   inode->i_uid = ninode->i_uid;
   inode->i_gid = ninode->i_gid;
   inode->i_nlink = ninode->i_nlink;
-  inode->i_atime = ninode->i_atime;
-  inode->i_ctime = ninode->i_ctime;
-  inode->i_mtime = ninode->i_mtime;
   // ops和size对于不同类型的文件略有差异，在这里分类处理
   if (S_ISREG(ninode->mode)) {
     // 是一个文件
     inode->i_op = &naive_iops;
     inode->i_fop = &naive_fops;
-    inode->i_aop = &naive_aops;
+    inode->i_mapping->a_ops = &naive_aops;
     inode->i_size = ninode->dir_children_count; // TODO: 合适吗？
   } else if (S_ISDIR(ninode->mode)) {
     // 是一个目录
     inode->i_op = &naive_iops;
     inode->i_fop = &naive_dops;
-    inode->i_aop = &naive_aops;
+    inode->i_mapping->a_ops = &naive_aops;
     inode->i_size = ninode->file_size;
   } else {
     // lnk、tty等类型不支持，打扰了
@@ -86,8 +93,8 @@ naive_get_inode(struct super_block *sb,
   // naive只有一个超级块、只有一个BlockGroup
   // 故下面这个简单的算式就可以算得ino对应inode在inode表中所在的块号
   // 注意这里显然要向下取整
-  int block_no_of_ino =
-      nsb->inode_table_block + (int)(ino * NAIVE_INODE_SIZE / NAIVE_BLOCK_SIZE);
+  int block_no_of_ino = nsb->inode_table_block_no +
+                        (int)(ino * NAIVE_INODE_SIZE / NAIVE_BLOCK_SIZE);
   // 找一个bh，先读出整个块
   struct buffer_head *bh = sb_bread(sb, block_no_of_ino);
 
@@ -101,32 +108,31 @@ naive_get_inode(struct super_block *sb,
   return ninode_head + offset;
 }
 
-// 用于支持在目录中找文件（根据文件名锁定文件）
+// 用于支持在目录中找文件（根据文件名锁定文件），将结果填充给dentry
 struct dentry *naive_lookup(struct inode *dir, struct dentry *dentry,
                             struct nameidata *nd) {
+  // 先把dir_record在的块读出来
   struct super_block *sb = dir->i_sb;
-
   struct naive_inode *ninode = naive_get_inode(sb, dir->i_ino);
-  int data_block_no = ninode->block[0];
-  struct buffer_head *bh;
-  bh = sb_bread(sb, data_block_no);
+  struct buffer_head *bh =
+      sb_bread(sb, ninode->block[0]); // FIXME: 一定是第0块吗？
 
+  // 现在开始遍历dir_record，直到找到文件对应的inode
   struct naive_dir_record *record_ptr = (struct naive_dir_record *)bh->b_data;
-  struct inode *inode;
+  struct inode *inode = NULL;
 
   int i;
   for (i = 0; i < ninode->dir_children_count; i++) {
     if (strcmp(dentry->d_name.name, record_ptr->filename) == 0) {
-      // 文件名相同，找到了
-      // TODO: iget?
-      inode = iget(sb, record_ptr->inode_no);
-      d_add(dentry, inode);
-      brelse(bh);
-      return NULL;
+      // 文件名相同，就是找到了
+      // iget的作用是从盘上读取指定的inode，这里需要原生inode，所以用不了naive_get_inode
+      inode = iget(sb, record_ptr->i_ino);
+      break;
     }
     record_ptr++;
   }
-  d_add(dentry, NULL);
+  // 结果写到dentry，返给系统，没找到就填充NULL
+  d_add(dentry, inode);
   brelse(bh);
   return NULL;
 }

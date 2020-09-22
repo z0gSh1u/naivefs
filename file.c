@@ -28,12 +28,6 @@ static int naive_mkdir(struct inode *dir, struct dentry *dentry, int mode,
 static int naive_mknod(struct inode *dir, struct dentry *dentry, int mode) {
   // 按照惯例，先拿超级块
   struct super_block *sb = dir->i_sb;
-  struct naive_super_block *nsb = NAIVE_SB(sb);
-
-  // 要创建的文件名
-  const char *filename = dentry->d_name.name;
-  // 拿到目录的自定义inode
-  struct naive_inode *dir_ninode = naive_get_inode(sb, dir->i_ino);
 
   // 为新文件分配一个inode号
   // 思考：系统是否保证create的不可重入性？
@@ -45,79 +39,112 @@ static int naive_mknod(struct inode *dir, struct dentry *dentry, int mode) {
   struct naive_inode ninode;
   inode = new_inode(sb);
   inode->i_ino = inode_no_to_use;
-  ninode.inode_no = inode->i_ino;
+  ninode.i_ino = inode->i_ino;
   // 这里的dir可不能给NULL了，因为已经不是根目录了
   inode_init_owner(inode, dir, mode);
   // 其余属性也填上去
   inode->i_op = &naive_iops;
   inode->i_atime = inode->i_ctime = inode->i_mtime = CURRENT_TIME;
-  ninode.i_atime = ninode.i_ctime = ninode.i_mtime = inode->i_atime;
+  ninode.i_atime = ninode.i_ctime = ninode.i_mtime = (inode->i_atime.tv_sec);
   // inode的uid、gid等属性不用手动填，在init_owner时会继承dir的
   ninode.i_uid = inode->i_uid;
   ninode.i_gid = inode->i_gid;
   ninode.i_nlink = inode->i_nlink;
   ninode.mode = mode;
+
   // 再来分类讨论一下类型
   if (S_ISDIR(mode)) {
     inode->i_size = 1; // TODO: 正确吗？
     inode->i_blocks = 1;
     inode->i_fop = &naive_dops;
-    ninode.blocks = 1;
+    ninode.block_count = 1;
     ninode.dir_children_count = 2; // .和..
     // 把我们的钉子户.和..加进去
     // 先处理.，分配这个inode管辖的第一个块
-    ninode.block[0] = naive_new_block_no(sb);
+    int block_no_to_use = naive_new_block_no(sb);
+    ninode.block[0] = block_no_to_use;
     // 然后把这条记录准备一下
-    struct naive_dir_record dir_dot;
-    strcpy(dir_dot.filename, ".");
-    dir_dot.inode_no = inode_no_to_use;
+    struct naive_dir_record dir_dots[2];
+    strcpy(dir_dots[0].filename, ".");
+    dir_dots[0].i_ino = inode_no_to_use;
     // 再处理..
-    struct naive_dir_record dir_dotdot;
-    strcpy(dir_dotdot.filename, "..");
+    strcpy(dir_dots[1].filename, "..");
     // 注意注意，它归属的inode是上级目录的inode，不是该目录的inode
-    dir_dotdot.inode_no = dir->i_ino;
-    // 好了，现在把inode信息和目录记录都写进磁盘！
-    save_inode(sb, ninode);
+    dir_dots[1].i_ino = dir->i_ino;
+    // 好了，现在把自定义inode信息和目录记录都写进磁盘！
+    write_back_ninode(sb, &ninode);
+    write_back_block(sb, block_no_to_use, dir_dots, 2 * NAIVE_DIR_RECORD_SIZE);
+    // 别忘了更新block的位图
+    set_bmap_bit(sb, block_no_to_use, true);
 
     // TODO: naivefs不考虑复杂的异常情况，其实这里应该把整个文件系统的空闲块减1
   } else if (S_ISREG(mode)) {
+    // 建立新的文件（空文件）并不占据数据块，这样就简单多了，不需要和块打交道
     inode->i_size = 0;
     inode->i_blocks = 0;
     inode->i_fop = &naive_fops;
     inode->i_mapping->a_ops = &naive_aops;
-    ninode.blocks = 0;
+    ninode.block_count = 0;
     ninode.file_size = 0;
-    // 好了，现在把inode信息和目录记录都写进磁盘！
-
+    // 好了，现在把inode信息写进磁盘
+    write_back_ninode(sb, &ninode);
   } else {
     make_bad_inode(inode);
     return 0;
   }
-  // 还没完呢
 
-  // 别忘了告诉系统这些地方已经脏了，有空更新一下
+  // 还没完呢！处理完新文件自身，我们还得处理它所在的目录...
+  // 先给所在目录加一条dir_record，关联到这个新文件
+  struct naive_dir_record new_dir_record;
+  strcpy(new_dir_record.filename, dentry->d_name.name);
+  new_dir_record.i_ino = inode_no_to_use;
+  // 写回
+  struct naive_inode *dir_ninode = naive_get_inode(sb, dir->i_ino);
+  struct buffer_head *bh = sb_bread(sb, dir_ninode->block[0]);
+  // 学到了，不用整个读到内核内存，可以直接操作bh->b_data
+  // 追加在原有的children记录末尾
+  memcpy(bh->b_data + dir_ninode->dir_children_count * NAIVE_DIR_RECORD_SIZE,
+         &new_dir_record, NAIVE_DIR_RECORD_SIZE);
+  map_bh(bh, sb, ninode.block[0]);
+  brelse(bh);
+  // 再给目录的自定义inode增加一个children
+  dir_ninode->dir_children_count++;
+  write_back_ninode(sb, dir_ninode);
+
+  // 别忘了告诉系统这些inode已经脏了，有空更新一下
   mark_inode_dirty(inode);
   mark_inode_dirty(dir);
+
+  // 还要记得更新inode的位图，因为我们新拿了一个inode且分配了
+  set_imap_bit(sb, inode_no_to_use, true);
+
+  // 把新文件的inode关联到dentry上
   d_instantiate(dentry, inode);
   return 0;
 }
 
-static int save_block(struct super_block *sb, int block_no, void *data,
-                      int size) {
+// 把变化的数据块写回盘，和下面写回ninode的差不多
+static void write_back_block(struct super_block *sb, int block_no, void *data,
+                             int size) {
   struct naive_super_block *nsb = NAIVE_SB(sb);
-  struct buffer_head *bh = sb_bread(sb, )
+  struct buffer_head *bh = sb_bread(sb, nsb->data_block_no + block_no);
+  memcpy(bh->b_data, data, size);
+  map_bh(bh, sb, nsb->data_block_no + block_no);
+  brelse(bh);
 }
 
-static int save_inode(struct super_block *sb, struct naive_inode *ninode) {
+// 把自定义inode写回盘
+static void write_back_ninode(struct super_block *sb,
+                              struct naive_inode *ninode) {
   // 拿自定义超级块，不说了
   struct naive_super_block *nsb = NAIVE_SB(sb);
 
   // 让我们再做点数学
   // 应该放到inode表的哪个块
-  int block_no = nsb->inode_table_block +
-                 ninode->inode_no * NAIVE_INODE_SIZE / NAIVE_BLOCK_SIZE;
+  int block_no = nsb->inode_table_block_no +
+                 ninode->i_ino * NAIVE_INODE_SIZE / NAIVE_BLOCK_SIZE;
   // 在这个块中的偏移量是多少
-  int block_offset = ninode->inode_no % (NAIVE_BLOCK_SIZE / NAIVE_INODE_SIZE);
+  int block_offset = ninode->i_ino % (NAIVE_BLOCK_SIZE / NAIVE_INODE_SIZE);
 
   // 现在开始上盘
   struct buffer_head *bh = sb_bread(sb, block_no);
@@ -130,5 +157,4 @@ static int save_inode(struct super_block *sb, struct naive_inode *ninode) {
 
   // 完事
   brelse(bh);
-  return 0;
 }

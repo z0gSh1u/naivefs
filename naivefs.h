@@ -40,7 +40,7 @@ struct naive_inode {
   int mode;                        // mode
   int i_ino;                       // ino
   int block_count;                 // 该inode负责几个块
-  int block[NAIVE_BLOCK_PER_FILE]; // 该inode负责哪几个块
+  int block[NAIVE_BLOCK_PER_FILE]; // 负责哪几个块，用第0块首部存dir_record
   // 对于文件，记录文件大小；对于目录，记录目录下项目数
   union {
     int file_size;
@@ -49,7 +49,7 @@ struct naive_inode {
   // TODO: 下面这些属性原生inode上也有，先记着，没作用后续删掉
   int i_uid;
   int i_gid;
-  int i_nlinks;
+  int i_nlink;
   int i_atime;
   int i_ctime;
   int i_mtime;

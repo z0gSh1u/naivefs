@@ -2,8 +2,8 @@
 # by z0gSh1u
 
 ifneq (${KERNELRELEASE},)
-obj-m := naivefs.o
-naivefs-m := bitmap.o dir.o file.o inode.o super.o
+obj-m += naivefs.o
+naivefs-objs := bitmap.o inode.o file.o dir.o 
 else
 KERNEL_DIR := /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)
