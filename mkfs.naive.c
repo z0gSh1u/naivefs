@@ -17,8 +17,6 @@ static struct naive_super_block nsb;
 static _Byte *bmap;
 static _Byte *imap;
 static int disk_size;
-static int bmap_size;
-static int imap_size;
 static int inode_table_size;
 
 // 关键任务就是按排布图来布局分区
@@ -32,26 +30,18 @@ static void format_disk(int fd, const char *path) {
   // 构建超级块
   nsb.magic = NAIVE_MAGIC;
   nsb.block_total = (int)(disk_size / NAIVE_BLOCK_SIZE);
-  nsb.inode_total =
-      nsb.block_total; // FIXME: 这个对不对？最坏情况是每个inode对应一个block？
+  nsb.inode_total = 128; // FIXME
 
   // 构建数据块位图
-  bmap_size =
-      nsb.block_total / (NAIVE_BLOCK_SIZE * 8); // 一个字节相当于8bit的bitmap
-  if (nsb.block_total % (NAIVE_BLOCK_SIZE * 8) != 0)
-    bmap_size += 1;
-  bmap = (_Byte *)malloc(bmap_size * NAIVE_BLOCK_SIZE);
-  memset(bmap, 0, bmap_size * NAIVE_BLOCK_SIZE);
+  bmap = (_Byte *)malloc(NAIVE_BLOCK_SIZE);
+  memset(bmap, 0, NAIVE_BLOCK_SIZE);
 
   // 构建inode位图
-  imap_size =
-      nsb.block_total / (NAIVE_BLOCK_SIZE * 8); // 一个字节相当于8bit的bitmap
-  if (nsb.block_total % (NAIVE_BLOCK_SIZE * 8) != 0)
-    imap_size += 1;
-  imap = (_Byte *)malloc(imap_size * NAIVE_BLOCK_SIZE);
-  memset(imap, 0, imap_size * NAIVE_BLOCK_SIZE);
+  imap = (_Byte *)malloc(NAIVE_BLOCK_SIZE);
+  memset(imap, 0, NAIVE_BLOCK_SIZE);
 
   // 构建inode表
+  // inode_table_size = nsb.inode_total * 1;
   inode_table_size = nsb.inode_total * NAIVE_INODE_SIZE / NAIVE_BLOCK_SIZE;
   nsb.inode_table_block_no = NAIVE_IMAP_BLOCK + 1;
   // FIXME: 这样似乎不能保证图10-4末尾两个组成部分均为n块
@@ -71,10 +61,10 @@ static void format_disk(int fd, const char *path) {
     int offset = i % 8;
     bmap[line] |= (1 << offset);
   }
-  write(fd, bmap, bmap_size * NAIVE_BLOCK_SIZE);
+  write(fd, bmap,  NAIVE_BLOCK_SIZE);
   // imap
   imap[0] |= 2; // ., ..
-  write(fd, imap, imap_size * NAIVE_BLOCK_SIZE);
+  write(fd, imap,  NAIVE_BLOCK_SIZE);
 
   // 准备基本的inode
   struct naive_inode root_inode;
@@ -89,14 +79,15 @@ static void format_disk(int fd, const char *path) {
   root_inode.i_atime = root_inode.i_mtime = root_inode.i_ctime = time(NULL);
   write(fd, &root_inode, NAIVE_INODE_SIZE);
 
-  // 准备几条目录记录
+  // 准备几条目录记录写到数据块
   struct naive_dir_record dir_dot;
   strcpy(dir_dot.filename, ".");
   dir_dot.i_ino = NAIVE_ROOT_INODE_NO;
   struct naive_dir_record dir_dotdot;
   strcpy(dir_dotdot.filename, "..");
   dir_dotdot.i_ino = NAIVE_ROOT_INODE_NO;
-
+  // 挪指针
+  lseek(fd, nsb.data_block_no * NAIVE_BLOCK_SIZE, SEEK_SET);
   write(fd, &dir_dot, NAIVE_DIR_RECORD_SIZE);
   write(fd, &dir_dotdot, NAIVE_DIR_RECORD_SIZE);
 }

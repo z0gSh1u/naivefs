@@ -53,8 +53,8 @@ struct naive_inode {
   int i_atime;
   int i_ctime;
   int i_mtime;
-  // 一样补齐
-  _Byte _padding[(NAIVE_BLOCK_SIZE - 11 * sizeof(int))];
+  // FIXME: 补齐是方便naive_get_inode计算，但是没必要
+  _Byte _padding[(NAIVE_BLOCK_SIZE - (10 + NAIVE_BLOCK_PER_FILE) * sizeof(int))];
 };
 
 // 目录下的项目的记录
