@@ -364,16 +364,13 @@ static void write_back_ninode(struct super_block *sb,
 
   // 让我们再做点数学
   // 应该放到inode表的哪个块
-  int block_no = nsb->inode_table_block_no +
-                 ninode->i_ino * NAIVE_INODE_SIZE / NAIVE_BLOCK_SIZE;
-  // 在这个块中的偏移量是多少
-  int block_offset = ninode->i_ino % (NAIVE_BLOCK_SIZE / NAIVE_INODE_SIZE);
+  int block_no = nsb->inode_table_block_no + ninode->i_ino;
 
   // 现在开始上盘
   struct buffer_head *bh = sb_bread(sb, block_no);
   // 块首指针
   struct naive_inode *block_head = (struct naive_inode *)bh->b_data;
-  memcpy(block_head + block_offset, ninode, NAIVE_INODE_SIZE);
+  memcpy(block_head, ninode, NAIVE_INODE_SIZE);
   // sb_bread只是读出来放到内存，前面更改的也是内存，并没有写回盘
   // 为了上盘，要建立映射，这是从ext2学的
   map_bh(bh, sb, block_no);
@@ -386,7 +383,7 @@ static void write_back_ninode(struct super_block *sb,
 
 // 这个函数用来初始化inode很好用，但在2.6.21.7内核下还未提供，我们做个polyfill
 // inode_init_owner的第二个参数是归属目录，根inode没有归属目录，给NULL
-// inode_init_owner的第三个参数是inode的访问控制属性，这里给755，同时标记是目录
+// inode_init_owner的第三个参数是inode的访问控制属性
 void my_inode_init_owner(struct inode *inode, const struct inode *dir,
                          umode_t mode) {
   if (dir == NULL) {
@@ -478,7 +475,7 @@ static struct naive_inode *naive_get_inode(struct super_block *sb, int ino) {
   // 找一个bh，读出整个块
   struct buffer_head *bh = sb_bread(sb, block_no_of_ino);
   struct naive_inode *ninode = (struct naive_inode *)bh->b_data;
-  
+
   return ninode;
 }
 
@@ -557,7 +554,7 @@ static void naive_put_super(struct super_block *sb) {
   // if (nfs == NULL)
   //   return;
   // kfree(nfs);
-  // 做了报错，那不做也罢
+  // 做了报错，暂时注释
   return;
 }
 
