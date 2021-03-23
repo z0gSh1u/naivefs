@@ -1,7 +1,6 @@
 // =================
 // naivefs.h
 // naive文件系统关键参数、数据结构的定义
-// mkfs、文件系统实现共用
 // =================
 
 #ifndef NAIVEFS_H_
@@ -23,7 +22,6 @@
 typedef unsigned char _Byte; // 字节定义
 
 // 自定义超级块
-// 这里参考了《鸟哥linux私房菜》和其他代码
 // 考虑到naivefs基本不做异常处理，省略了很多没有用到的属性
 struct naive_super_block {
   int magic;                // 魔数

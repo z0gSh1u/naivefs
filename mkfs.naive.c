@@ -19,13 +19,13 @@ static _Byte *imap;
 static int disk_size;
 static int inode_table_size;
 
-// 关键任务就是按排布图来布局分区
+// 按排布图来布局分区
 static void format_disk(int fd, const char *path) {
   // 先获取设备（磁盘）的总大小
   struct stat stat_;
   stat(path, &stat_);
   disk_size = stat_.st_size;
-  printf("[mkfs] size of disk: %lu bytes.\n", disk_size);
+  printf("[mkfs_naive] Capacity of disk: %lu bytes.\n", disk_size);
 
   // 构建超级块
   nsb.magic = NAIVE_MAGIC;
@@ -41,7 +41,6 @@ static void format_disk(int fd, const char *path) {
   memset(imap, 0, NAIVE_BLOCK_SIZE);
 
   // 构建inode表
-  // inode_table_size = nsb.inode_total * 1;
   inode_table_size = nsb.inode_total * NAIVE_INODE_SIZE / NAIVE_BLOCK_SIZE;
   nsb.inode_table_block_no = NAIVE_IMAP_BLOCK + 1;
   // FIXME: 这样似乎不能保证图10-4末尾两个组成部分均为n块
@@ -95,7 +94,7 @@ static void format_disk(int fd, const char *path) {
 int main(int argc, char const *argv[]) {
   int fd;
   if (argc != 2)
-    printf("[mkfs] no device specified.\n");
+    printf("[mkfs_naive] No device specified.\n");
   fd = open(argv[1], O_RDWR);
   format_disk(fd, argv[1]);
   close(fd);
