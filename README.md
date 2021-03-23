@@ -4,7 +4,7 @@
 
 ## 编译
 
-- 准备合适版本的 Linux 内核
+- 准备合适版本的 Linux 内核源码
 
   ```shell
   KERNEL_DIR := /lib/modules/$(shell uname -r)/build
